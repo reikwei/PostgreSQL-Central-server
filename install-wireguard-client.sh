@@ -12,6 +12,16 @@ die() {
   exit 1
 }
 
+validate_mtu() {
+  local mtu_value=$1
+
+  [[ ${mtu_value} =~ ^[0-9]+$ ]] || die "WG_MTU 必须是数字"
+
+  if (( mtu_value < 1280 || mtu_value > 1500 )); then
+    die "WG_MTU 必须位于 1280 到 1500 之间，跨地域链路建议使用 1280 或 1380"
+  fi
+}
+
 require_root() {
   if [[ ${EUID} -ne 0 ]]; then
     die "请使用 sudo 运行"
@@ -65,14 +75,42 @@ install_client_config() {
   local source_config=$1
   local interface_name=$2
   local target_config="/etc/wireguard/${interface_name}.conf"
+  local client_mtu=${WG_MTU:-1380}
 
   install -d -m 0700 /etc/wireguard
+  validate_mtu "${client_mtu}"
 
   if [[ -f ${target_config} ]]; then
     cp -a "${target_config}" "${target_config}.bak.$(date +%F-%H%M%S)"
   fi
 
   install -m 0600 "${source_config}" "${target_config}"
+
+  if ! grep -q '^MTU = ' "${target_config}"; then
+    awk -v mtu="${client_mtu}" '
+      BEGIN { inserted = 0 }
+      /^Address = / && !inserted {
+        print
+        print "MTU = " mtu
+        inserted = 1
+        next
+      }
+      /^\[Peer\]$/ && !inserted {
+        print "MTU = " mtu
+        inserted = 1
+      }
+      { print }
+      END {
+        if (!inserted) {
+          print "MTU = " mtu
+        }
+      }
+    ' "${target_config}" > "${target_config}.tmp"
+    mv "${target_config}.tmp" "${target_config}"
+    chmod 0600 "${target_config}"
+    log "客户端配置缺少 MTU，已自动补充 MTU = ${client_mtu}"
+  fi
+
   log "客户端配置已写入 ${target_config}"
 }
 

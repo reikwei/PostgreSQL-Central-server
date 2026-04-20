@@ -30,6 +30,7 @@ PostgreSQL Central Server 适合这样的场景：
 - PostgreSQL 绑定到 127.0.0.1:5432。
 - PgBouncer 绑定到 WireGuard 地址 10.66.0.1:6432。
 - 所有业务机先接入 WireGuard，再访问 10.66.0.1:6432。
+- 默认 WireGuard MTU 为 1380；跨服务商、跨地域链路如果仍有大包卡顿，可进一步降到 1280。
 - 当前 peer 自动分配逻辑按 /24 网段设计，因此 WG_SUBNET 应保持类似 10.66.0.0/24。
 
 组件边界如下：
@@ -67,6 +68,7 @@ cp .env.example .env
 
 - APP_DB_PASSWORD
 - PUBLIC_ENDPOINT
+- WG_MTU
 - ALLOW_SSH_CIDR
 - PGBR_REPO_TYPE
 - PGBR_REPO_PATH
@@ -128,6 +130,8 @@ sudo bash install-wireguard-client.sh /tmp/bot-001.conf
 sudo bash install-wireguard-client.sh /tmp/bot-001.conf wg0
 ```
 
+如果你导入的是旧版本生成的客户端配置，安装脚本会在缺少 MTU 时自动补上 1380。
+
 安装完成后，业务节点统一通过以下入口连接数据库：
 
 - Host: 10.66.0.1
@@ -149,6 +153,20 @@ sudo /usr/local/sbin/pg-center-check-connectivity 10.66.0.1 6432 wg0
 ```
 
 它会检查 WireGuard 状态、路由和 PgBouncer 端口可达性，并在失败时打印排障信息。
+
+## 跨地域链路的 MTU 建议
+
+跨服务商、跨地域组建 WireGuard 时，最常见的坑之一就是 MTU。
+
+常见现象：
+
+- 简单命令或少量请求响应很快。
+- 数据库查询一旦返回大结果集，连接就开始卡顿甚至超时。
+- 备份文件、WAL 或对象存储传输在大流量时看起来像“偶发性卡死”。
+
+原因通常不是 WireGuard 本身不可用，而是中间链路的实际可承载 MTU 小于默认值，经过复杂公网路由后发生分片或丢包。
+
+当前脚本默认使用 WG_MTU=1380，并会把它写入服务端和新生成的客户端配置；如果你的链路横跨香港、美国或多个云厂商，且仍然出现大包传输异常，建议把 WG_MTU 进一步降到 1280，然后重新下发客户端配置并重启两端的 WireGuard。
 
 ## 运维模型
 

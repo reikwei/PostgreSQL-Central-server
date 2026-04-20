@@ -84,6 +84,7 @@ load_env() {
 
   WG_INTERFACE=${WG_INTERFACE:-wg0}
   WG_PORT=${WG_PORT:-51820}
+  WG_MTU=${WG_MTU:-1380}
   WG_SUBNET=${WG_SUBNET:-10.66.0.0/24}
   WG_SERVER_IP=${WG_SERVER_IP:-10.66.0.1}
   WG_CLIENT_DNS=${WG_CLIENT_DNS:-1.1.1.1}
@@ -128,9 +129,14 @@ load_env() {
 
   [[ ${WG_SUBNET} =~ ^([0-9]{1,3}\.){3}0/24$ ]] || die "当前脚本要求 WG_SUBNET 使用 /24 网段，例如 10.66.0.0/24"
   [[ ${WG_SERVER_IP} =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || die "WG_SERVER_IP 格式不正确"
+  [[ ${WG_MTU} =~ ^[0-9]+$ ]] || die "WG_MTU 必须是数字"
 
   if [[ ${WG_SERVER_IP%.*}.0/24 != ${WG_SUBNET} ]]; then
     die "WG_SERVER_IP 与 WG_SUBNET 不匹配"
+  fi
+
+  if (( WG_MTU < 1280 || WG_MTU > 1500 )); then
+    die "WG_MTU 必须位于 1280 到 1500 之间，跨地域链路建议使用 1280 或 1380"
   fi
 
   if [[ ${PGBR_REPO_PATH} != /* ]]; then
@@ -491,6 +497,7 @@ PGBR_FULL_ONCALENDAR="${PGBR_FULL_ONCALENDAR}"
 PGBR_INCR_ONCALENDAR="${PGBR_INCR_ONCALENDAR}"
 WG_INTERFACE=${WG_INTERFACE}
 WG_PORT=${WG_PORT}
+WG_MTU=${WG_MTU}
 WG_SUBNET=${WG_SUBNET}
 WG_SERVER_IP=${WG_SERVER_IP}
 WG_CLIENT_DNS=${WG_CLIENT_DNS}
@@ -532,6 +539,7 @@ configure_wireguard() {
     cat > "/etc/wireguard/${WG_INTERFACE}.conf" <<EOF
 [Interface]
 Address = ${WG_SERVER_IP}/${WG_SUBNET#*/}
+MTU = ${WG_MTU}
 ListenPort = ${WG_PORT}
 PrivateKey = ${server_private_key}
 SaveConfig = false
@@ -541,6 +549,26 @@ EOF
     warn "/etc/wireguard/${WG_INTERFACE}.conf 已存在，保留现有 peer 列表"
     if ! grep -q "^Address = ${WG_SERVER_IP}/${WG_SUBNET#*/}$" "/etc/wireguard/${WG_INTERFACE}.conf"; then
       warn "当前 WireGuard 配置的地址不是 ${WG_SERVER_IP}/${WG_SUBNET#*/}，请确认与你的现网规划一致"
+    fi
+
+    if grep -q '^MTU = ' "/etc/wireguard/${WG_INTERFACE}.conf"; then
+      sed -i "s/^MTU = .*/MTU = ${WG_MTU}/" "/etc/wireguard/${WG_INTERFACE}.conf"
+    else
+      awk -v mtu="${WG_MTU}" '
+        BEGIN { inserted = 0 }
+        /^\[Peer\]$/ && !inserted {
+          print "MTU = " mtu
+          inserted = 1
+        }
+        { print }
+        END {
+          if (!inserted) {
+            print "MTU = " mtu
+          }
+        }
+      ' "/etc/wireguard/${WG_INTERFACE}.conf" > "/etc/wireguard/${WG_INTERFACE}.conf.tmp"
+      mv "/etc/wireguard/${WG_INTERFACE}.conf.tmp" "/etc/wireguard/${WG_INTERFACE}.conf"
+      chmod 0600 "/etc/wireguard/${WG_INTERFACE}.conf"
     fi
   fi
 

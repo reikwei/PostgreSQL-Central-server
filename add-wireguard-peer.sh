@@ -86,6 +86,7 @@ EOF
 [Interface]
 PrivateKey = ${client_private_key}
 Address = ${client_ip}/32
+MTU = ${WG_MTU}
 DNS = ${WG_CLIENT_DNS}
 
 [Peer]
