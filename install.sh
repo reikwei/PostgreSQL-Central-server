@@ -371,6 +371,18 @@ EOF
     sed -i 's/^START=.*/START=1/' /etc/default/pgbouncer
   fi
 
+  install -d -m 0755 /etc/systemd/system/pgbouncer.service.d
+  cat > /etc/systemd/system/pgbouncer.service.d/override.conf <<EOF
+[Unit]
+Requires=wg-quick@${WG_INTERFACE}.service
+After=wg-quick@${WG_INTERFACE}.service
+
+[Service]
+Restart=on-failure
+RestartSec=2s
+EOF
+
+  systemctl daemon-reload
   systemctl enable pgbouncer
   systemctl restart pgbouncer
 }
@@ -402,6 +414,7 @@ configure_pgbackrest() {
   log "配置 pgBackRest"
 
   install -d -m 0750 /etc/pgbackrest
+  chown root:postgres /etc/pgbackrest
   install -d -m 0750 /var/log/pgbackrest /var/spool/pgbackrest
   chown postgres:postgres /var/log/pgbackrest /var/spool/pgbackrest
 
@@ -474,8 +487,8 @@ PGBR_PROCESS_MAX=${PGBR_PROCESS_MAX}
 PGBR_COMPRESS_TYPE=${PGBR_COMPRESS_TYPE}
 PGBR_RETENTION_FULL=${PGBR_RETENTION_FULL}
 PGBR_RETENTION_DIFF=${PGBR_RETENTION_DIFF}
-PGBR_FULL_ONCALENDAR=${PGBR_FULL_ONCALENDAR}
-PGBR_INCR_ONCALENDAR=${PGBR_INCR_ONCALENDAR}
+PGBR_FULL_ONCALENDAR="${PGBR_FULL_ONCALENDAR}"
+PGBR_INCR_ONCALENDAR="${PGBR_INCR_ONCALENDAR}"
 WG_INTERFACE=${WG_INTERFACE}
 WG_PORT=${WG_PORT}
 WG_SUBNET=${WG_SUBNET}
@@ -761,11 +774,11 @@ main() {
   ensure_pg_cluster
   configure_postgresql
   create_database_and_user
+  configure_wireguard
   configure_pgbouncer
   configure_pgbackrest
   write_server_env
   install_management_script
-  configure_wireguard
   configure_firewall
   configure_backup
   show_summary

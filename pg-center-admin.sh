@@ -112,6 +112,38 @@ postgresql://${user_name}:<password>@${WG_SERVER_IP}:${PGB_PORT}/${database_name
 EOF
 }
 
+show_postgres_connection_help() {
+  cat <<EOF
+postgres 超级用户连接说明
+
+用途
+  - 仅用于本机直连 PostgreSQL 的管理或应急场景。
+  - 不用于业务应用连接。
+  - 不通过 PgBouncer。
+
+连接参数
+  Host: 127.0.0.1
+  Port: ${PG_PORT}
+  Database: postgres
+  User: postgres
+
+密码存放
+  - 推荐查看: /root/postgres-superuser-credentials.txt
+  - 如果密码遗失，可执行: pgadmin reset-postgres-password
+
+psql 示例
+  PGPASSWORD='<password>' psql -h 127.0.0.1 -p ${PG_PORT} -U postgres -d postgres
+
+URI 示例
+  postgresql://postgres:<password>@127.0.0.1:${PG_PORT}/postgres
+
+说明
+  - PostgreSQL 当前仅监听本机 127.0.0.1:${PG_PORT}。
+  - postgres 不会加入 PgBouncer userlist。
+  - 业务节点应继续连接 ${WG_SERVER_IP}:${PGB_PORT}，不要使用 postgres 账号。
+EOF
+}
+
 list_users() {
   psql_exec "SELECT rolname AS user_name,
                     rolcreatedb AS can_create_db,
@@ -530,10 +562,27 @@ reset_password() {
   echo "PASSWORD=${password}"
 }
 
+reset_postgres_password() {
+  local password=${1:-}
+  local escaped_password
+
+  if [[ -z ${password} ]]; then
+    password=$(generate_password)
+  fi
+  escaped_password=$(sql_escape_literal "${password}")
+
+  psql_exec "ALTER ROLE postgres WITH LOGIN PASSWORD '${escaped_password}';"
+
+  echo "USER=postgres"
+  echo "PASSWORD=${password}"
+  echo "NOTE=postgres 不会加入 PgBouncer userlist，请仅用于本机直连 PostgreSQL 或紧急管理场景。"
+}
+
 disable_user() {
   local user_name=$1
 
   validate_identifier "${user_name}" "user_name"
+  [[ ${user_name} != "postgres" ]] || die "不允许停用 postgres"
   psql_query "SELECT 1 FROM pg_roles WHERE rolname = '${user_name}'" | grep -qx '1' || die "用户 ${user_name} 不存在"
   psql_exec "ALTER ROLE \"${user_name}\" NOLOGIN;"
   sync_pgbouncer_userlist
@@ -623,6 +672,8 @@ usage() {
   export-database-audit-summary <database>
   create-user <user> [password]
   reset-password <user> [password]
+  reset-postgres-password [password]
+  show-postgres-connection-help
   disable-user <user>
   drop-user <user>
   create-database <database> <owner>
@@ -724,25 +775,14 @@ interactive_menu() {
   while true; do
     cat <<'EOF'
 
-pg-center-admin 交互菜单
-  1. 查询用户列表
-  2. 查询数据库列表
-  3. 查看某个用户拥有哪些数据库级权限
-  4. 查看某个数据库下哪些用户有数据库级权限
-  5. 查看某个用户在各 schema 和表上的权限
-  6. 查看某个 schema 下哪些用户有权限
-  7. 导出某个用户的权限审计摘要
-  8. 导出某个数据库的权限审计摘要
-  9. 新建用户
-  10. 重置用户密码
-  11. 停用用户
-  12. 删除用户
-  13. 新建数据库
-  14. 修改数据库所有者
-  15. 删除数据库
-  16. 一次性创建数据库 + 用户
-  17. 同步 PgBouncer 用户清单
-  0. 退出
+pg-center-admin 交互菜单 by reik22
+  1. 用户列表        2. 数据库列表      3. 用户库权限
+  4. 库用户权限      5. 用户表权限      6. schema 权限
+  7. 导出用户审计    8. 导出库审计      9. 新建用户
+ 10. 重置用户密码   11. 改 postgres 密码 12. postgres 说明
+ 13. 停用用户       14. 删除用户       15. 新建数据库
+ 16. 改库所有者     17. 删除数据库     18. 创建库+用户
+ 19. 同步 PgBouncer  0. 退出
 EOF
 
     read -r -p "请选择编号: " choice
@@ -818,6 +858,19 @@ EOF
         pause_prompt
         ;;
       11)
+        password=$(prompt_optional_secret "输入 postgres 新密码")
+        if [[ -n ${password} ]]; then
+          run_subcommand reset-postgres-password "${password}" || true
+        else
+          run_subcommand reset-postgres-password || true
+        fi
+        pause_prompt
+        ;;
+      12)
+        run_subcommand show-postgres-connection-help || true
+        pause_prompt
+        ;;
+      13)
         user_name=$(prompt_required "输入要停用的用户名")
         if confirm_exact_match "用户名" "${user_name}"; then
           run_subcommand disable-user "${user_name}" || true
@@ -826,7 +879,7 @@ EOF
         fi
         pause_prompt
         ;;
-      12)
+      14)
         user_name=$(prompt_required "输入要删除的用户名")
         if confirm_exact_match "用户名" "${user_name}"; then
           run_subcommand drop-user "${user_name}" || true
@@ -835,19 +888,19 @@ EOF
         fi
         pause_prompt
         ;;
-      13)
+      15)
         database_name=$(prompt_required "输入新数据库名")
         owner_name=$(prompt_required "输入数据库所有者用户名")
         run_subcommand create-database "${database_name}" "${owner_name}" || true
         pause_prompt
         ;;
-      14)
+      16)
         database_name=$(prompt_required "输入数据库名")
         owner_name=$(prompt_required "输入新的所有者用户名")
         run_subcommand change-database-owner "${database_name}" "${owner_name}" || true
         pause_prompt
         ;;
-      15)
+      17)
         database_name=$(prompt_required "输入要删除的数据库名")
         if confirm_exact_match "数据库名" "${database_name}"; then
           run_subcommand drop-database "${database_name}" || true
@@ -856,7 +909,7 @@ EOF
         fi
         pause_prompt
         ;;
-      16)
+      18)
         database_name=$(prompt_required "输入新数据库名")
         user_name=$(prompt_required "输入新用户名")
         password=$(prompt_optional_secret "输入密码")
@@ -867,7 +920,7 @@ EOF
         fi
         pause_prompt
         ;;
-      17)
+      19)
         run_subcommand sync-pgbouncer-users || true
         pause_prompt
         ;;
@@ -930,6 +983,14 @@ main() {
     reset-password)
       [[ $# -ge 2 ]] || die "用法: $0 reset-password <user> [password]"
       reset_password "$2" "${3:-}"
+      ;;
+    reset-postgres-password)
+      [[ $# -le 2 ]] || die "用法: $0 reset-postgres-password [password]"
+      reset_postgres_password "${2:-}"
+      ;;
+    show-postgres-connection-help)
+      [[ $# -eq 1 ]] || die "用法: $0 show-postgres-connection-help"
+      show_postgres_connection_help
       ;;
     disable-user)
       [[ $# -eq 2 ]] || die "用法: $0 disable-user <user>"

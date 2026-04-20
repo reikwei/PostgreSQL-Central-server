@@ -182,10 +182,25 @@ pgadmin
 - 查询数据库和用户列表。
 - 查看数据库级、schema 级、表级权限。
 - 导出用户或数据库的权限审计摘要。
-- 新建用户、重置密码、停用用户、删除用户。
+- 新建用户、重置密码、修改 postgres 密码、停用用户、删除用户。
 - 新建数据库、修改所有者、删除数据库。
 - 一次性创建数据库和用户。
+- 查看 postgres 超级用户的本机直连方式说明。
 - 每次用户变更后自动同步 PgBouncer userlist。
+
+常用命令示例：
+
+```bash
+pgadmin reset-postgres-password
+pgadmin show-postgres-connection-help
+```
+
+关于 postgres 超级用户，建议这样使用：
+
+- postgres 只用于主库本机上的管理和应急操作，不用于业务应用连接。
+- postgres 不走 PgBouncer，连接目标应为 127.0.0.1:5432。
+- 如果已经为主库生成过超级用户凭据，可查看 /root/postgres-superuser-credentials.txt。
+- 如果密码遗失，可随时执行 pgadmin reset-postgres-password 重新生成。
 
 审计导出默认输出到：
 
