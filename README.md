@@ -230,27 +230,6 @@ PGBR_S3_KEY_SECRET=your-secret-key
 - 公开仓库只保留 .env.example 作为模板。
 - 发布前建议确认仓库里没有真实 IP 白名单、访问密钥或业务密码。
 
-## 推送到 GitHub
-
-仓库根目录提供了一键推送脚本：
-
-```bash
-bash pushgithub.sh
-```
-
-脚本会：
-
-- 自动初始化 git 仓库（如果当前目录还不是仓库）。
-- 自动配置远端到指定 GitHub 地址。
-- 临时启用 192.168.50.101:7890 代理进行 push。
-- 推送结束后自动清理本次执行过程中的代理环境变量。
-
-如果你需要自定义提交信息：
-
-```bash
-bash pushgithub.sh "docs: refine product README"
-```
-
 ## 备份与恢复
 
 默认备份策略：
