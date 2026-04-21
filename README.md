@@ -50,7 +50,7 @@ PostgreSQL Central Server 适合这样的场景：
 - install.sh：主库一键安装脚本。
 - pg-center-admin.sh：主库统一管理入口。
 - add-wireguard-peer.sh：新增业务节点 peer 并生成客户端配置。
-- install-wireguard-client.sh：在业务节点导入并启用 WireGuard。
+- install-wireguard-client.sh：在业务节点导入并启用 WireGuard，并安装 PostgreSQL 客户端工具。
 - check-pg-center-connectivity.sh：业务节点连通性复测脚本。
 - s3minlo/install-minio.sh：自建 MinIO 场景的辅助脚本。
 
@@ -132,6 +132,8 @@ sudo bash install-wireguard-client.sh /tmp/bot-001.conf wg0
 
 如果你导入的是旧版本生成的客户端配置，安装脚本会在缺少 MTU 时自动补上 1380。
 
+这个脚本还会安装 PostgreSQL 客户端工具，因此子 VPS 上会直接具备 `psql` 和 `pg_isready`，方便继续做数据库权限层验证，但不会在子机上启动 PostgreSQL 服务。
+
 安装完成后，业务节点统一通过以下入口连接数据库：
 
 - Host: 10.66.0.1
@@ -153,6 +155,13 @@ sudo /usr/local/sbin/pg-center-check-connectivity 10.66.0.1 6432 wg0
 ```
 
 它会检查 WireGuard 状态、路由和 PgBouncer 端口可达性，并在失败时打印排障信息。
+
+如果你还想继续验证数据库权限层，可以在子 VPS 上执行：
+
+```bash
+pg_isready -h 10.66.0.1 -p 6432
+psql "host=10.66.0.1 port=6432 dbname=你的数据库名 user=你的用户名"
+```
 
 ## 跨地域链路的 MTU 建议
 
@@ -200,9 +209,9 @@ pgadmin
 - 查询数据库和用户列表。
 - 查看数据库级、schema 级、表级权限。
 - 导出用户或数据库的权限审计摘要。
-- 新建用户、重置密码、修改 postgres 密码、停用用户、删除用户。
+- 新建用户、重置密码、授予或收回建库权限、修改 postgres 密码、停用用户、删除用户。
 - 新建数据库、修改所有者、删除数据库。
-- 一次性创建数据库和用户。
+- 一次性创建数据库和用户，并自动验证该账号能否通过 PgBouncer 登录及完成基本读写。
 - 查看 postgres 超级用户的本机直连方式说明。
 - 每次用户变更后自动同步 PgBouncer userlist。
 
@@ -211,7 +220,11 @@ pgadmin
 ```bash
 pgadmin reset-postgres-password
 pgadmin show-postgres-connection-help
+pgadmin verify-pgbouncer-login your_db your_user 'your-password'
+pgadmin verify-pgbouncer-rw your_db your_user 'your-password'
 ```
+
+其中 `create-app` 在创建数据库和用户后，会自动执行一次 PgBouncer 登录验证和一次业务级读写验证；如果你只是想单独检查某个现有账号的认证层是否正常，可以使用 `verify-pgbouncer-login`，如果想继续确认建表、插入、查询和清理也正常，可以使用 `verify-pgbouncer-rw`。
 
 关于 postgres 超级用户，建议这样使用：
 

@@ -40,10 +40,11 @@ ensure_os() {
 }
 
 install_packages() {
-  log "安装 WireGuard 客户端依赖"
+  log "安装 WireGuard 和 PostgreSQL 客户端依赖"
   apt-get update
   DEBIAN_FRONTEND=noninteractive apt-get install -y \
     iproute2 \
+    postgresql-client \
     systemd \
     wireguard \
     resolvconf
@@ -149,13 +150,16 @@ WireGuard 客户端安装完成。
 
 常用命令
   wg show ${interface_name}
+  psql --version
+  pg_isready -h 10.66.0.1 -p 6432
   systemctl restart wg-quick@${interface_name}
   systemctl stop wg-quick@${interface_name}
   /usr/local/sbin/pg-center-check-connectivity 10.66.0.1 6432 ${interface_name}
 
 下一步
   1. 在本机执行 wg show ${interface_name}，确认握手正常。
-  2. 如果刚才自动检查失败，再手工执行 /usr/local/sbin/pg-center-check-connectivity 10.66.0.1 6432 ${interface_name}。
+  2. 执行 pg_isready -h 10.66.0.1 -p 6432，确认 PgBouncer 入口可达。
+  3. 如果刚才自动检查失败，再手工执行 /usr/local/sbin/pg-center-check-connectivity 10.66.0.1 6432 ${interface_name}。
 EOF
 }
 

@@ -540,6 +540,8 @@ create_user() {
 
   echo "USER=${user_name}"
   echo "PASSWORD=${password}"
+  echo "CAN_CREATE_DB=no"
+  echo "NOTE=用户默认以 NOCREATEDB 创建；如需允许该账号自行建库，请执行: pg-center-admin grant-createdb ${user_name}"
 }
 
 reset_password() {
@@ -560,6 +562,100 @@ reset_password() {
 
   echo "USER=${user_name}"
   echo "PASSWORD=${password}"
+}
+
+verify_pgbouncer_login() {
+  local database_name=$1
+  local user_name=$2
+  local password=$3
+  local output
+
+  validate_identifier "${database_name}" "database_name"
+  validate_identifier "${user_name}" "user_name"
+  [[ -n ${password} ]] || die "verify-pgbouncer-login 必须提供密码"
+  command -v psql >/dev/null 2>&1 || die "当前系统缺少 psql，请先安装 postgresql-client"
+
+  psql_query "SELECT 1 FROM pg_database WHERE datname = '${database_name}'" | grep -qx '1' || die "数据库 ${database_name} 不存在"
+  psql_query "SELECT 1 FROM pg_roles WHERE rolname = '${user_name}'" | grep -qx '1' || die "用户 ${user_name} 不存在"
+
+  if ! output=$(PGPASSWORD="${password}" PGCONNECT_TIMEOUT=5 psql \
+      -w -h "${WG_SERVER_IP}" -p "${PGB_PORT}" -U "${user_name}" -d "${database_name}" \
+      -Atqc "SELECT current_user, current_database()" 2>&1); then
+    echo "VERIFY_PGBOUNCER_LOGIN=failed"
+    echo "VERIFY_TARGET=${WG_SERVER_IP}:${PGB_PORT}/${database_name}"
+    echo "VERIFY_OUTPUT=${output}"
+    die "PgBouncer 登录验证失败；数据库和用户可能已创建成功，但认证层未通过"
+  fi
+
+  echo "VERIFY_PGBOUNCER_LOGIN=ok"
+  echo "VERIFY_TARGET=${WG_SERVER_IP}:${PGB_PORT}/${database_name}"
+  echo "VERIFY_OUTPUT=${output}"
+}
+
+verify_pgbouncer_rw() {
+  local database_name=$1
+  local user_name=$2
+  local password=$3
+  local schema_name
+  local table_name
+  local output
+
+  validate_identifier "${database_name}" "database_name"
+  validate_identifier "${user_name}" "user_name"
+  [[ -n ${password} ]] || die "verify-pgbouncer-rw 必须提供密码"
+  command -v psql >/dev/null 2>&1 || die "当前系统缺少 psql，请先安装 postgresql-client"
+
+  psql_query "SELECT 1 FROM pg_database WHERE datname = '${database_name}'" | grep -qx '1' || die "数据库 ${database_name} 不存在"
+  psql_query "SELECT 1 FROM pg_roles WHERE rolname = '${user_name}'" | grep -qx '1' || die "用户 ${user_name} 不存在"
+
+  schema_name="app_probe_${user_name}_$(date +%s)_${RANDOM}"
+  table_name="rw_probe"
+
+  if ! output=$(PGPASSWORD="${password}" PGCONNECT_TIMEOUT=5 psql \
+      -w -h "${WG_SERVER_IP}" -p "${PGB_PORT}" -U "${user_name}" -d "${database_name}" \
+      -v ON_ERROR_STOP=1 -qAt \
+      -c "CREATE SCHEMA \"${schema_name}\" AUTHORIZATION CURRENT_USER; \
+          CREATE TABLE \"${schema_name}\".\"${table_name}\" (id integer primary key, note text not null); \
+          INSERT INTO \"${schema_name}\".\"${table_name}\" (id, note) VALUES (1, 'pg-center-rw-ok'); \
+          SELECT current_user || '|' || current_database() || '|' || count(*)::text FROM \"${schema_name}\".\"${table_name}\"; \
+          DROP SCHEMA \"${schema_name}\" CASCADE;" 2>&1); then
+    PGPASSWORD="${password}" PGCONNECT_TIMEOUT=5 psql \
+      -w -h "${WG_SERVER_IP}" -p "${PGB_PORT}" -U "${user_name}" -d "${database_name}" \
+      -v ON_ERROR_STOP=0 -qAt \
+      -c "DROP SCHEMA IF EXISTS \"${schema_name}\" CASCADE;" >/dev/null 2>&1 || true
+    echo "VERIFY_PGBOUNCER_RW=failed"
+    echo "VERIFY_TARGET=${WG_SERVER_IP}:${PGB_PORT}/${database_name}"
+    echo "VERIFY_OUTPUT=${output}"
+    die "PgBouncer 业务级读写验证失败；认证可能通过，但建表/插入/查询/清理未全部完成"
+  fi
+
+  echo "VERIFY_PGBOUNCER_RW=ok"
+  echo "VERIFY_TARGET=${WG_SERVER_IP}:${PGB_PORT}/${database_name}"
+  echo "VERIFY_OUTPUT=${output}"
+}
+
+set_user_createdb() {
+  local user_name=$1
+  local enabled=$2
+
+  validate_identifier "${user_name}" "user_name"
+  psql_query "SELECT 1 FROM pg_roles WHERE rolname = '${user_name}'" | grep -qx '1' || die "用户 ${user_name} 不存在"
+
+  case "${enabled}" in
+    on)
+      psql_exec "ALTER ROLE \"${user_name}\" CREATEDB;"
+      echo "USER=${user_name}"
+      echo "CAN_CREATE_DB=yes"
+      ;;
+    off)
+      psql_exec "ALTER ROLE \"${user_name}\" NOCREATEDB;"
+      echo "USER=${user_name}"
+      echo "CAN_CREATE_DB=no"
+      ;;
+    *)
+      die "enabled 仅支持 on 或 off"
+      ;;
+  esac
 }
 
 reset_postgres_password() {
@@ -653,8 +749,14 @@ create_app() {
   local user_name=$2
   local password=${3:-}
 
+  if [[ -z ${password} ]]; then
+    password=$(generate_password)
+  fi
+
   create_user "${user_name}" "${password}"
   create_database "${database_name}" "${user_name}"
+  verify_pgbouncer_login "${database_name}" "${user_name}" "${password}"
+  verify_pgbouncer_rw "${database_name}" "${user_name}" "${password}"
 }
 
 usage() {
@@ -672,6 +774,10 @@ usage() {
   export-database-audit-summary <database>
   create-user <user> [password]
   reset-password <user> [password]
+  verify-pgbouncer-login <database> <user> <password>
+  verify-pgbouncer-rw <database> <user> <password>
+  grant-createdb <user>
+  revoke-createdb <user>
   reset-postgres-password [password]
   show-postgres-connection-help
   disable-user <user>
@@ -779,10 +885,11 @@ pg-center-admin 交互菜单 by reik22
   1. 用户列表        2. 数据库列表      3. 用户库权限
   4. 库用户权限      5. 用户表权限      6. schema 权限
   7. 导出用户审计    8. 导出库审计      9. 新建用户
- 10. 重置用户密码   11. 改 postgres 密码 12. postgres 说明
- 13. 停用用户       14. 删除用户       15. 新建数据库
- 16. 改库所有者     17. 删除数据库     18. 创建库+用户
- 19. 同步 PgBouncer  0. 退出
+ 10. 重置用户密码   11. 授予建库权限    12. 收回建库权限
+ 13. 改 postgres 密码 14. postgres 说明  15. 停用用户
+ 16. 删除用户       17. 新建数据库     18. 改库所有者
+ 19. 删除数据库     20. 创建库+用户+业务验收 21. 验证 PgBouncer 登录
+ 22. 验证 PgBouncer 读写 23. 同步 PgBouncer  0. 退出
 EOF
 
     read -r -p "请选择编号: " choice
@@ -858,6 +965,16 @@ EOF
         pause_prompt
         ;;
       11)
+        user_name=$(prompt_required "输入要授予建库权限的用户名")
+        run_subcommand grant-createdb "${user_name}" || true
+        pause_prompt
+        ;;
+      12)
+        user_name=$(prompt_required "输入要收回建库权限的用户名")
+        run_subcommand revoke-createdb "${user_name}" || true
+        pause_prompt
+        ;;
+      13)
         password=$(prompt_optional_secret "输入 postgres 新密码")
         if [[ -n ${password} ]]; then
           run_subcommand reset-postgres-password "${password}" || true
@@ -866,11 +983,11 @@ EOF
         fi
         pause_prompt
         ;;
-      12)
+      14)
         run_subcommand show-postgres-connection-help || true
         pause_prompt
         ;;
-      13)
+      15)
         user_name=$(prompt_required "输入要停用的用户名")
         if confirm_exact_match "用户名" "${user_name}"; then
           run_subcommand disable-user "${user_name}" || true
@@ -879,7 +996,7 @@ EOF
         fi
         pause_prompt
         ;;
-      14)
+      16)
         user_name=$(prompt_required "输入要删除的用户名")
         if confirm_exact_match "用户名" "${user_name}"; then
           run_subcommand drop-user "${user_name}" || true
@@ -888,19 +1005,19 @@ EOF
         fi
         pause_prompt
         ;;
-      15)
+      17)
         database_name=$(prompt_required "输入新数据库名")
         owner_name=$(prompt_required "输入数据库所有者用户名")
         run_subcommand create-database "${database_name}" "${owner_name}" || true
         pause_prompt
         ;;
-      16)
+      18)
         database_name=$(prompt_required "输入数据库名")
         owner_name=$(prompt_required "输入新的所有者用户名")
         run_subcommand change-database-owner "${database_name}" "${owner_name}" || true
         pause_prompt
         ;;
-      17)
+      19)
         database_name=$(prompt_required "输入要删除的数据库名")
         if confirm_exact_match "数据库名" "${database_name}"; then
           run_subcommand drop-database "${database_name}" || true
@@ -909,7 +1026,7 @@ EOF
         fi
         pause_prompt
         ;;
-      18)
+      20)
         database_name=$(prompt_required "输入新数据库名")
         user_name=$(prompt_required "输入新用户名")
         password=$(prompt_optional_secret "输入密码")
@@ -920,7 +1037,21 @@ EOF
         fi
         pause_prompt
         ;;
-      19)
+      21)
+        database_name=$(prompt_required "输入要验证的数据库名")
+        user_name=$(prompt_required "输入要验证的用户名")
+        password=$(prompt_required "输入用于验证的密码")
+        run_subcommand verify-pgbouncer-login "${database_name}" "${user_name}" "${password}" || true
+        pause_prompt
+        ;;
+      22)
+        database_name=$(prompt_required "输入要做读写验证的数据库名")
+        user_name=$(prompt_required "输入要做读写验证的用户名")
+        password=$(prompt_required "输入用于验证的密码")
+        run_subcommand verify-pgbouncer-rw "${database_name}" "${user_name}" "${password}" || true
+        pause_prompt
+        ;;
+      23)
         run_subcommand sync-pgbouncer-users || true
         pause_prompt
         ;;
@@ -983,6 +1114,22 @@ main() {
     reset-password)
       [[ $# -ge 2 ]] || die "用法: $0 reset-password <user> [password]"
       reset_password "$2" "${3:-}"
+      ;;
+    verify-pgbouncer-login)
+      [[ $# -eq 4 ]] || die "用法: $0 verify-pgbouncer-login <database> <user> <password>"
+      verify_pgbouncer_login "$2" "$3" "$4"
+      ;;
+    verify-pgbouncer-rw)
+      [[ $# -eq 4 ]] || die "用法: $0 verify-pgbouncer-rw <database> <user> <password>"
+      verify_pgbouncer_rw "$2" "$3" "$4"
+      ;;
+    grant-createdb)
+      [[ $# -eq 2 ]] || die "用法: $0 grant-createdb <user>"
+      set_user_createdb "$2" on
+      ;;
+    revoke-createdb)
+      [[ $# -eq 2 ]] || die "用法: $0 revoke-createdb <user>"
+      set_user_createdb "$2" off
       ;;
     reset-postgres-password)
       [[ $# -le 2 ]] || die "用法: $0 reset-postgres-password [password]"
