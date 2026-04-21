@@ -830,7 +830,7 @@ prompt_optional_secret() {
 
   while true; do
     read -r -s -p "${prompt_text}（留空则自动生成）: " secret
-    echo
+    echo >&2
 
     if [[ -z ${secret} ]]; then
       printf '%s' ""
@@ -838,7 +838,7 @@ prompt_optional_secret() {
     fi
 
     read -r -s -p "再次输入密码确认: " confirm_secret
-    echo
+    echo >&2
 
     if [[ ${secret} == ${confirm_secret} ]]; then
       printf '%s' "${secret}"
@@ -846,6 +846,23 @@ prompt_optional_secret() {
     fi
 
     echo "两次输入的密码不一致，请重新输入。" >&2
+  done
+}
+
+prompt_required_secret() {
+  local prompt_text=$1
+  local secret
+
+  while true; do
+    read -r -s -p "${prompt_text}: " secret
+    echo >&2
+
+    if [[ -n ${secret} ]]; then
+      printf '%s' "${secret}"
+      return 0
+    fi
+
+    echo "输入不能为空。" >&2
   done
 }
 
@@ -1040,14 +1057,14 @@ EOF
       21)
         database_name=$(prompt_required "输入要验证的数据库名")
         user_name=$(prompt_required "输入要验证的用户名")
-        password=$(prompt_required "输入用于验证的密码")
+        password=$(prompt_required_secret "输入用于验证的密码")
         run_subcommand verify-pgbouncer-login "${database_name}" "${user_name}" "${password}" || true
         pause_prompt
         ;;
       22)
         database_name=$(prompt_required "输入要做读写验证的数据库名")
         user_name=$(prompt_required "输入要做读写验证的用户名")
-        password=$(prompt_required "输入用于验证的密码")
+        password=$(prompt_required_secret "输入用于验证的密码")
         run_subcommand verify-pgbouncer-rw "${database_name}" "${user_name}" "${password}" || true
         pause_prompt
         ;;
